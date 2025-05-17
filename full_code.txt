@@ -1,0 +1,2120 @@
+Directory Tree:
+AutoAnki/
+│   ├── .DS_Store
+│   ├── buildServer.json
+│   ├── card_generation.patch
+│   ├── .entitlements
+│   ├── full_code.txt
+│   ├── Frameworks
+│   ├── AutoAnki/
+│   │   ├── MathTextContainer.swift
+│   │   ├── Secrets.xcconfig
+│   │   ├── StudySessionView.swift
+│   │   ├── .DS_Store
+│   │   ├── DeckDetailView.swift
+│   │   ├── AutoAnki.entitlements
+│   │   ├── FlashcardPlayView.swift
+│   │   ├── Message.swift
+│   │   ├── MathTextView.swift
+│   │   ├── CardGenerator.swift
+│   │   ├── Card.swift
+│   │   ├── AutoAnkiApp.swift
+│   │   ├── CardGenerationView.swift
+│   │   ├── GPTView.swift
+│   │   ├── ContentView.swift
+│   │   ├── DeckManager.swift
+│   │   ├── GPTView.swift.backup
+│   │   ├── Info.plist
+│   │   ├── Assets.xcassets/
+│   │   │   ├── Contents.json
+│   │   │   ├── AppIcon.appiconset/
+│   │   │   │   ├── Contents.json
+│   │   │   ├── AccentColor.colorset/
+│   │   │   │   ├── Contents.json
+│   │   ├── Preview Content/
+│   │   │   ├── Preview Assets.xcassets/
+│   │   │   │   ├── Contents.json
+│   ├── AutoAnkiTests/
+│   │   ├── AutoAnkiTests.swift
+│   ├── AutoAnki.xcodeproj/
+│   │   ├── project.pbxproj
+│   │   ├── xcuserdata/
+│   │   │   ├── seanzhang.xcuserdatad/
+│   │   │   │   ├── xcdebugger/
+│   │   │   │   │   ├── Breakpoints_v2.xcbkptlist
+│   │   │   │   ├── xcschemes/
+│   │   │   │   │   ├── xcschememanagement.plist
+│   │   ├── project.xcworkspace/
+│   │   │   ├── contents.xcworkspacedata
+│   │   │   ├── xcuserdata/
+│   │   │   │   ├── seanzhang.xcuserdatad/
+│   │   │   │   │   ├── UserInterfaceState.xcuserstate
+│   │   │   ├── xcshareddata/
+│   │   │   │   ├── swiftpm/
+│   │   │   │   │   ├── configuration/
+│   ├── AutoAnkiUITests/
+│   │   ├── AutoAnkiUITests.swift
+│   │   ├── AutoAnkiUITestsLaunchTests.swift
+
+
+
+
+# ======================
+# File: buildServer.json
+# ======================
+
+{
+	"name": "xcode build server",
+	"version": "0.2",
+	"bspVersion": "2.0",
+	"languages": [
+		"c",
+		"cpp",
+		"objective-c",
+		"objective-cpp",
+		"swift"
+	],
+	"argv": [
+		"/opt/homebrew/bin/xcode-build-server"
+	],
+	"workspace": "/Users/seanzhang/AutoAnki/AutoAnki.xcodeproj/project.xcworkspace",
+	"build_root": "/Users/seanzhang/Library/Developer/Xcode/DerivedData/AutoAnki-bnkypqbiqxalrubeszrwqidcqyjn",
+	"scheme": "AutoAnki",
+	"kind": "xcode"
+}
+
+# ======================
+# File: AutoAnki/MathTextContainer.swift
+# ======================
+
+import SwiftUI
+
+/// Container for MathTextView that handles scrolling and dynamic height
+struct MathTextContainer: View {
+    let content: String
+    @State private var height: CGFloat = 150
+    let maxHeight: CGFloat = 1800 // allow scrolling for very long messages
+    
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            MathTextView(content: content, onHeightChange: { newHeight in
+                // Add a generous buffer to the height to prevent cutting off content
+                let adjustedHeight = newHeight + 24 // buffer for padding
+                DispatchQueue.main.async {
+                    self.height = min(adjustedHeight, maxHeight)
+                }
+            })
+            .frame(height: height)
+        }
+        .frame(height: height)
+        .animation(.easeInOut(duration: 0.2), value: height)
+        .onAppear {
+            self.height = min(estimateInitialHeight(for: content), maxHeight)
+        }
+    }
+    
+    /// Estimate an initial height based on content length to reduce layout jumps
+    private func estimateInitialHeight(for text: String) -> CGFloat {
+        let lines = max(1, text.split(separator: "\n").count)
+        let estimated = CGFloat(lines) * 22.0 + 32 // rough per-line height + padding
+        return max(estimated, 100)
+    }
+} 
+
+# ======================
+# File: AutoAnki/StudySessionView.swift
+# ======================
+
+import SwiftUI
+import WebKit
+
+/// Tab-based study session: **Card** tab for review + **GPT** chat tab.
+struct StudySessionView: View {
+    let deckID: UUID
+    @EnvironmentObject var deckManager: DeckManager
+    @State private var deck: Deck
+
+    // Card state
+    @State private var currentIndex = 0
+    @State private var showingFront = true
+
+    // Alert when deck is finished
+    @State private var sessionComplete = false
+
+    init(deck: Deck) {
+        self.deckID = deck.id
+        _deck = State(initialValue: deck)
+    }
+
+    // MARK: – Computed helpers
+    private var currentCard: Card { deck.cards[currentIndex] }
+    private var progressText: String { "\(deck.name)   \(currentIndex + 1) / \(deck.cards.count)" }
+
+    // MARK: – Body
+    var body: some View {
+        TabView {
+            cardTab
+                .tabItem { Label("Card", systemImage: "rectangle.on.rectangle") }
+
+            GPTView(card: currentCard)
+                .environmentObject(deckManager)
+                .tabItem { Label("GPT", systemImage: "brain.head.profile") }
+        }
+        .navigationTitle("Study Mode")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .alert("Session complete 🎉", isPresented: $sessionComplete) {
+            Button("OK", role: .cancel) { }
+        }
+
+        // Sync deck when deckManager updates
+        .onReceive(deckManager.$decks) { _ in
+            if let updated = deckManager.decks.first(where: { $0.id == deckID }) {
+                self.deck = updated
+            }
+        }
+    }
+
+    // MARK: – Card tab view
+    private var cardTab: some View {
+        VStack(spacing: 16) {
+
+            // Progress
+            Text(progressText)
+                .font(.headline)
+                .padding(.top)
+
+            Spacer()
+
+            // Flashcard panel
+            ZStack {
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(Color.gray.opacity(0.15))
+                    .shadow(radius: 4)
+
+                // Math-aware flashcard content
+                MathTextContainer(content: showingFront ? currentCard.front : currentCard.back)
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(height: 260)
+            .padding(.horizontal, 24)
+            .onTapGesture { showingFront.toggle() }
+            .gesture(DragGesture(minimumDistance: 30)
+                .onEnded { value in
+                    if value.translation.width < -40 { nextCard() }
+                    if value.translation.width >  40 { prevCard() }
+                })
+
+            // Grading buttons
+            HStack(spacing: 12) {
+                gradeButton(.again)
+                gradeButton(.hard)
+                gradeButton(.good)
+                gradeButton(.easy)
+            }
+            .padding(.horizontal)
+
+            Spacer()
+        }
+        .padding(.bottom)
+    }
+
+    // MARK: – Grading helpers
+    private enum Grade: String { case again, hard, good, easy
+        var title: String { switch self {
+            case .again: "Again"
+            case .hard : "Hard"
+            case .good : "Good"
+            case .easy : "Easy" } }
+        var color: Color { switch self {
+            case .again: .red
+            case .hard : .orange
+            case .good : .green
+            case .easy : .blue } }
+        var delay: TimeInterval { switch self {
+            case .again:   60       // 1 min
+            case .hard :  360       // 6 min
+            case .good :  600       // 10 min
+            case .easy : 86400 } }  // 1 day
+    }
+
+    @ViewBuilder
+    private func gradeButton(_ grade: Grade) -> some View {
+        Button(grade.title) { self.grade(grade) }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(grade.color.opacity(0.15))
+            .foregroundColor(grade.color)
+            .clipShape(Capsule())
+            // add per-button 1/2/3/4 shortcuts:
+            .keyboardShortcut(KeyEquivalent(grade.rawValue.first!), modifiers: [])
+    }
+
+    private func grade(_ grade: Grade) {
+        // TODO: Persist `grade.delay` for real spaced-repetition
+        nextCard()
+    }
+
+    // MARK: – Card navigation
+    private func nextCard() {
+        guard currentIndex < deck.cards.count - 1 else {
+            sessionComplete = true
+            return
+        }
+        currentIndex += 1
+        showingFront = true
+    }
+
+    private func prevCard() {
+        guard currentIndex > 0 else { return }
+        currentIndex -= 1
+        showingFront = true
+    }
+}
+
+
+# ======================
+# File: AutoAnki/DeckDetailView.swift
+# ======================
+
+//
+//  DeckDetailView.swift
+//  AutoAnki
+//
+//  Created by Sean Zhang on 5/13/25.
+//
+
+import SwiftUI
+
+struct DeckDetailView: View {
+    @EnvironmentObject var deckManager: DeckManager
+    let deck: Deck
+
+    @State private var front = ""
+    @State private var back = ""
+
+    var body: some View {
+        VStack {
+            HStack {
+                TextField("Front", text: $front)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                TextField("Back", text: $back)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                Button("Add Card") {
+                    guard !front.isEmpty && !back.isEmpty else { return }
+                    deckManager.addCard(to: deck, front: front, back: back)
+                    front = ""
+                    back = ""
+                }
+            }
+            .padding()
+            
+            NavigationLink(destination: StudySessionView(deck: deck)
+                .environmentObject(deckManager)
+            ) {
+                Text("Study Deck")
+                    .font(.headline)
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                    .padding(.horizontal)
+            }
+
+            // New card-generation entry point
+            NavigationLink(destination: CardGenerationView(deck: deck).environmentObject(deckManager)) {
+                Text("Generate Cards from Text/PDF")
+                    .font(.subheadline)
+                    .padding(8)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.green.opacity(0.2))
+                    .cornerRadius(8)
+                    .padding(.horizontal)
+            }
+
+            List {
+                ForEach(deck.cards) { card in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Q:")
+                                .bold()
+                                .font(.callout)
+                            MathTextContainer(content: card.front)
+                        }
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("A:")
+                                .foregroundColor(.secondary)
+                                .font(.callout)
+                            MathTextContainer(content: card.back)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .navigationTitle(deck.name)
+    }
+}
+
+
+
+# ======================
+# File: AutoAnki/FlashcardPlayView.swift
+# ======================
+
+import SwiftUI
+import WebKit
+
+/// Stand-alone play view (not used by StudySessionView but kept for parity).
+struct FlashcardPlayView: View {
+    let deck: Deck
+    @EnvironmentObject var deckManager: DeckManager
+
+    @State private var currentIndex = 0
+    @State private var showingFront = true
+    @State private var sessionComplete = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+
+            Text("\(deck.name)   \(currentIndex + 1) / \(deck.cards.count)")
+                .font(.headline)
+                .padding(.top)
+
+            Spacer()
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(Color.gray.opacity(0.15))
+                // Math-aware flashcard content
+                MathTextContainer(content: showingFront 
+                                 ? deck.cards[currentIndex].front
+                                 : deck.cards[currentIndex].back)
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(height: 260)
+            .padding(.horizontal, 24)
+            .onTapGesture { showingFront.toggle() }
+
+            HStack(spacing: 12) {
+                gradeButton("Again", .red,   60)
+                gradeButton("Hard",  .orange,360)
+                gradeButton("Good",  .green, 600)
+                gradeButton("Easy",  .blue,  86_400)
+            }
+            .padding(.horizontal)
+
+            Spacer()
+        }
+        .alert("Session complete 🎉", isPresented: $sessionComplete) {
+            Button("OK", role: .cancel) {}
+        }
+        .navigationTitle("Flashcards")
+    }
+
+    // MARK: – Helpers
+    private func gradeButton(_ title: String, _ color: Color, _ delay: TimeInterval) -> some View {
+        Button(title) { nextCard() }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(color.opacity(0.15))
+            .foregroundColor(color)
+            .clipShape(Capsule())
+    }
+
+    private func nextCard() {
+        if currentIndex < deck.cards.count - 1 {
+            currentIndex += 1
+            showingFront = true
+        } else {
+            sessionComplete = true
+        }
+    }
+}
+
+
+# ======================
+# File: AutoAnki/Message.swift
+# ======================
+
+import Foundation
+
+/// Generic chat message used by GPTView.
+struct Message: Identifiable {
+    let id = UUID()
+    let role: String        // "system", "user", or "assistant"
+    let content: String
+}
+
+
+# ======================
+# File: AutoAnki/MathTextView.swift
+# ======================
+
+import SwiftUI
+import WebKit
+
+/// A view that renders text with LaTeX math expressions using MathJax
+struct MathTextView: UIViewRepresentable {
+    let content: String
+    var onHeightChange: ((CGFloat) -> Void)?
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    func makeUIView(context: Context) -> WKWebView {
+        // Configure the web view
+        let configuration = WKWebViewConfiguration()
+        let contentController = WKUserContentController()
+        
+        // Add message handler for height changes
+        contentController.add(context.coordinator, name: "heightChange")
+        contentController.add(context.coordinator, name: "log")
+        configuration.userContentController = contentController
+        
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.backgroundColor = .clear
+        webView.isOpaque = false
+        webView.scrollView.isScrollEnabled = false
+        return webView
+    }
+    
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        // Create HTML with MathJax
+        let html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+            <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+            <style>
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                    font-size: 16px;
+                    margin: 0;
+                    padding: 0;
+                    background-color: transparent;
+                    color: black;
+                    line-height: 1.5;
+                    overflow-wrap: break-word;
+                    word-wrap: break-word;
+                    hyphens: auto;
+                }
+                @media (prefers-color-scheme: dark) {
+                    body {
+                        color: white;
+                    }
+                    .mjx-math {
+                        color: white !important;
+                    }
+                }
+                .content {
+                    padding: 8px;
+                    word-wrap: break-word;
+                    overflow-wrap: break-word;
+                    width: 100%;
+                    box-sizing: border-box;
+                }
+                .mjx-chtml {
+                    display: inline-block;
+                    line-height: 0;
+                    text-indent: 0;
+                    text-align: left;
+                    text-transform: none;
+                    font-style: normal;
+                    font-weight: normal;
+                    font-size: 100%;
+                    font-size-adjust: none;
+                    letter-spacing: normal;
+                    word-wrap: normal;
+                    word-spacing: normal;
+                    white-space: nowrap;
+                    direction: ltr;
+                    padding: 1px 0;
+                    margin-bottom: 5px; /* Add space after math */
+                }
+                /* For display math ($$...$$) */
+                .MJXc-display {
+                    overflow-x: auto;
+                    overflow-y: hidden;
+                    margin: 10px 0;
+                    padding: 5px 0;
+                    width: 100%;
+                }
+                .mjx-math {
+                    color: inherit;
+                    max-width: 100%;
+                    overflow-x: auto;
+                }
+                /* Make sure all math is fully visible */
+                .mjx-chtml {
+                    max-width: 100%;
+                    overflow-x: auto;
+                    overflow-y: hidden;
+                }
+                code {
+                    font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+                    padding: 0.2em 0.4em;
+                    margin: 0;
+                    font-size: 85%;
+                    background-color: rgba(175, 184, 193, 0.2);
+                    border-radius: 6px;
+                }
+                /* Handle math overflow */
+                mjx-container {
+                    max-width: 100%;
+                    overflow-x: auto;
+                    overflow-y: hidden;
+                    padding-bottom: 5px;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="content">
+                \(formatContentForMathJax(content))
+            </div>
+            <script>
+                // Logging helper
+                function log(msg) {
+                    window.webkit.messageHandlers.log.postMessage(msg);
+                }
+                
+                // Auto-resize based on content
+                function updateHeight() {
+                    // Calculate the document height with a generous margin to prevent cut-off
+                    // Get the full document scrollHeight plus extra padding
+                    const calculatedHeight = document.body.scrollHeight + 40;
+                    window.webkit.messageHandlers.heightChange.postMessage(calculatedHeight);
+                }
+                
+                window.addEventListener('load', function() {
+                    setTimeout(updateHeight, 200);
+                });
+                
+                // Additional safeguard to ensure height is updated after DOM changes
+                const observer = new MutationObserver(function(mutations) {
+                    setTimeout(updateHeight, 100);
+                });
+                
+                observer.observe(document.body, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true
+                });
+                
+                // Configure MathJax
+                window.MathJax = {
+                    tex: {
+                        inlineMath: [['$', '$'], ['\\(', '\\)']],
+                        displayMath: [['$$', '$$'], ['\\[', '\\]']],
+                        processEscapes: true,
+                        processEnvironments: true,
+                        packages: ['base', 'ams', 'noerrors', 'noundefined']
+                    },
+                    svg: {
+                        fontCache: 'global'
+                    },
+                    options: {
+                        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+                        ignoreHtmlClass: 'tex2jax_ignore',
+                        processHtmlClass: 'tex2jax_process'
+                    },
+                    startup: {
+                        pageReady: function() {
+                            return MathJax.startup.defaultPageReady().then(function() {
+                                try {
+                                    // Force a reflow to ensure proper layout
+                                    document.body.style.display = 'none';
+                                    document.body.offsetHeight;
+                                    document.body.style.display = '';
+                                    
+                                    // Make all math content horizontally scrollable if needed
+                                    document.querySelectorAll('.mjx-chtml').forEach(function(el) {
+                                        if (el.scrollWidth > el.clientWidth) {
+                                            el.style.overflowX = 'auto';
+                                            el.style.maxWidth = '100%';
+                                            el.style.display = 'block';
+                                            el.style.padding = '5px 0';
+                                        }
+                                    });
+                                    
+                                    // Ensure updateHeight is called after MathJax processing
+                                    setTimeout(updateHeight, 200);
+                                    
+                                    // Add a second call with longer delay to ensure all math is rendered
+                                    setTimeout(updateHeight, 500);
+                                    
+                                    // Add a third call for complex math expressions
+                                    setTimeout(updateHeight, 1000);
+                                } catch (error) {
+                                    log('Error in MathJax processing: ' + error.message);
+                                }
+                            });
+                        }
+                    }
+                };
+                
+                // Handle MathJax errors
+                window.addEventListener('error', function(event) {
+                    log('JavaScript error: ' + event.message);
+                });
+                
+                // Resize observer for dynamic content changes
+                if (window.ResizeObserver) {
+                    const observer = new ResizeObserver(() => {
+                        updateHeight();
+                    });
+                    observer.observe(document.body);
+                }
+            </script>
+        </body>
+        </html>
+        """
+        
+        webView.loadHTMLString(html, baseURL: nil)
+    }
+    
+    /// Format content to handle LaTeX and HTML formatting
+    private func formatContentForMathJax(_ text: String) -> String {
+        // Step 0: Basic Markdown to HTML for bold (**text**) and italics (*text*)
+        let markdownConverted = applyBasicMarkdownFormatting(text)
+
+        // Step 1: Convert line breaks to <br> tags (preserve any existing <br> tags)
+        let withLineBreaks = markdownConverted.replacingOccurrences(of: "\n", with: "<br>")
+
+        // Step 2: Format inline code with <code> tags
+        let codePattern = try? NSRegularExpression(pattern: "`([^`]+)`")
+        let codeFormatted: String
+
+        if let codePattern = codePattern {
+            let range = NSRange(withLineBreaks.startIndex..<withLineBreaks.endIndex, in: withLineBreaks)
+            codeFormatted = codePattern.stringByReplacingMatches(
+                in: withLineBreaks,
+                options: [],
+                range: range,
+                withTemplate: "<code>$1</code>"
+            )
+        } else {
+            codeFormatted = withLineBreaks
+        }
+
+        // Step 3: Protect math delimiters and escape HTML but allow certain tags
+        return processMathContent(codeFormatted)
+    }
+    
+    /// Convert simple markdown bold/italic to HTML equivalents
+    private func applyBasicMarkdownFormatting(_ input: String) -> String {
+        var output = input
+        // Bold **text**
+        if let boldRegex = try? NSRegularExpression(pattern: "\\*\\*([^*]+)\\*\\*") {
+            let range = NSRange(location: 0, length: output.utf16.count)
+            output = boldRegex.stringByReplacingMatches(in: output, options: [], range: range, withTemplate: "<strong>$1</strong>")
+        }
+
+        // Italic *text* (single asterisks) - make sure not to replace bold markers already handled
+        if let italicRegex = try? NSRegularExpression(pattern: "(?<!\\*)\\*([^*]+)\\*(?!\\*)") {
+            let range = NSRange(location: 0, length: output.utf16.count)
+            output = italicRegex.stringByReplacingMatches(in: output, options: [], range: range, withTemplate: "<em>$1</em>")
+        }
+
+        return output
+    }
+    
+    /// Process content to preserve math delimiters while escaping HTML elsewhere
+    private func processMathContent(_ text: String) -> String {
+        var result = ""
+        var remaining = text
+        
+        // Single $ for inline math
+        while let dollarRange = remaining.range(of: "$") {
+            // Add escaped HTML for content before the math
+            let beforeMath = String(remaining[..<dollarRange.lowerBound])
+            result += escapeHTML(beforeMath)
+            
+            // Remove processed part
+            remaining = String(remaining[dollarRange.lowerBound...])
+            
+            // Find closing dollar
+            if let closingRange = remaining.range(of: "$", range: remaining.index(after: remaining.startIndex)..<remaining.endIndex) {
+                // Add the entire math expression (including $ signs)
+                let mathExpression = String(remaining[..<closingRange.upperBound])
+                result += mathExpression
+                
+                // Remove processed math part
+                if closingRange.upperBound < remaining.endIndex {
+                    remaining = String(remaining[closingRange.upperBound...])
+                } else {
+                    remaining = ""
+                    break
+                }
+            } else {
+                // No closing $ found - treat as regular text
+                result += "$"
+                if remaining.count > 1 {
+                    remaining = String(remaining[remaining.index(after: remaining.startIndex)...])
+                } else {
+                    break
+                }
+            }
+        }
+        
+        // Add any remaining content with HTML escaped
+        if !remaining.isEmpty {
+            result += escapeHTML(remaining)
+        }
+        
+        return result
+    }
+    
+    /// Escape HTML special characters but allow basic formatting tags
+    private func escapeHTML(_ text: String) -> String {
+        // Allowed tags we want to keep unescaped (lowercase)
+        let allowed = ["br", "strong", "b", "em", "i", "ul", "ol", "li", "p"]
+
+        var output = text
+
+        // Temporary placeholders for allowed tags
+        for tag in allowed {
+            output = output.replacingOccurrences(of: "<\(tag)>", with: "%%ALLOWED_OPEN_\(tag.uppercased())%%")
+            output = output.replacingOccurrences(of: "</\(tag)>", with: "%%ALLOWED_CLOSE_\(tag.uppercased())%%")
+            // Self-closing variants for br
+            output = output.replacingOccurrences(of: "<\(tag)/>", with: "%%ALLOWED_SELFCLOSE_\(tag.uppercased())%%")
+        }
+
+        // Now escape the rest
+        output = output
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+
+        // Restore placeholders
+        for tag in allowed {
+            output = output.replacingOccurrences(of: "%%ALLOWED_OPEN_\(tag.uppercased())%%", with: "<\(tag)>")
+            output = output.replacingOccurrences(of: "%%ALLOWED_CLOSE_\(tag.uppercased())%%", with: "</\(tag)>")
+            output = output.replacingOccurrences(of: "%%ALLOWED_SELFCLOSE_\(tag.uppercased())%%", with: "<\(tag)/>")
+        }
+
+        return output
+    }
+    
+    // Coordinator to handle WKWebView message events
+    class Coordinator: NSObject, WKScriptMessageHandler {
+        var parent: MathTextView
+        
+        init(_ parent: MathTextView) {
+            self.parent = parent
+        }
+        
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            switch message.name {
+            case "heightChange":
+                if let height = message.body as? CGFloat {
+                    parent.onHeightChange?(height)
+                }
+            case "log":
+                if let log = message.body as? String {
+                    print("MathJax Log:", log)
+                }
+            default:
+                break
+            }
+        }
+    }
+}
+
+// No additional structs or classes here 
+
+# ======================
+# File: AutoAnki/CardGenerator.swift
+# ======================
+
+//  CardGenerator.swift
+//  AutoAnki
+//  Generates flashcards from raw text using GPT function-calling.
+
+import Foundation
+
+@MainActor
+final class CardGenerator {
+
+    static let shared = CardGenerator()
+    private init() {}
+
+    /// Generates cards from raw text using the `extract_cards_from_text` function schema.
+    /// - Parameter text: Raw study notes or extracted PDF text.
+    /// - Returns: Array of freshly generated `Card`s (may be empty on failure).
+    func generateCards(from text: String) async -> [Card] {
+        guard let apiKey = Bundle.main.infoDictionary?["OPENAI_API_KEY"] as? String else {
+            print("⚠️ Missing API key in Info.plist")
+            return []
+        }
+
+        // --- 1. Build the function schema ----------------------------------
+        let functionSchema: [String: Any] = [
+            "name": "extract_cards_from_text",
+            "description": "Generate Anki flashcards from raw input text.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "cards": [
+                        "type": "array",
+                        "items": [
+                            "type": "object",
+                            "properties": [
+                                "front": ["type": "string"],
+                                "back":  ["type": "string"]
+                            ],
+                            "required": ["front", "back"]
+                        ]
+                    ]
+                ],
+                "required": ["cards"]
+            ]
+        ]
+
+        // --- 2. Compose chat messages ---------------------------------------
+        let systemPrompt = "You are an expert flashcard generator. Follow Anki best-practices. Return JSON matching the function schema when invoked."
+        let userPrompt   = "Generate high-quality flashcards from the following text:\n\n" + text
+
+        let messages: [[String: Any]] = [
+            ["role": "system", "content": systemPrompt],
+            ["role": "user",   "content": userPrompt]
+        ]
+
+        let body: [String: Any] = [
+            "model": "gpt-4o-mini",
+            "messages": messages,
+            "functions": [functionSchema],
+            "function_call": ["name": "extract_cards_from_text"]
+        ]
+
+        // --- 3. Perform request ---------------------------------------------
+        var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        do { req.httpBody = try JSONSerialization.data(withJSONObject: body) } catch {
+            print("⚠️ Failed to encode request body: \(error)"); return [] }
+
+        do {
+            let (data, _) = try await URLSession.shared.data(for: req)
+            guard
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let choices = json["choices"] as? [[String: Any]],
+                let message = choices.first?["message"] as? [String: Any]
+            else { return [] }
+
+            // Prefer structured tool call result
+            if let functionCall = message["function_call"] as? [String: Any],
+               let argumentsRaw = functionCall["arguments"] as? String,
+               let argumentsData = argumentsRaw.data(using: .utf8),
+               let argsJSON  = try? JSONSerialization.jsonObject(with: argumentsData) as? [String: Any],
+               let cardDicts = argsJSON["cards"] as? [[String: String]] {
+                return cardDicts.compactMap { dict in
+                    guard let f = dict["front"], let b = dict["back"] else { return nil }
+                    return Card(front: f, back: b)
+                }
+            }
+
+            // Fallback: try plain-text JSON in content
+            if let content = message["content"] as? String,
+               let data = content.data(using: .utf8),
+               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] {
+                return array.compactMap { dict in
+                    guard let f = dict["front"], let b = dict["back"] else { return nil }
+                    return Card(front: f, back: b)
+                }
+            }
+        } catch {
+            print("⚠️ Card generation network/parsing error: \(error)")
+        }
+
+        return []
+    }
+}
+
+extension Card: Hashable {
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    static func == (lhs: Card, rhs: Card) -> Bool { lhs.id == rhs.id }
+}
+
+// End of file 
+
+# ======================
+# File: AutoAnki/Card.swift
+# ======================
+
+//
+//  Card.swift
+//  AutoAnki
+//
+//  Created by Sean Zhang on 5/13/25.
+//
+
+import Foundation
+
+struct Card: Identifiable, Codable {
+    let id: UUID
+    var front: String
+    var back: String
+
+    init(id: UUID = UUID(), front: String, back: String) {
+        self.id = id
+        self.front = front
+        self.back = back
+    }
+}
+
+import Foundation
+
+struct Deck: Identifiable, Codable {
+    let id: UUID
+    var name: String
+    var cards: [Card]
+
+    init(id: UUID = UUID(), name: String, cards: [Card] = []) {
+        self.id = id
+        self.name = name
+        self.cards = cards
+    }
+}
+
+
+
+
+# ======================
+# File: AutoAnki/AutoAnkiApp.swift
+# ======================
+
+//
+//  AutoAnkiApp.swift
+//  AutoAnki
+//
+//  Created by Sean Zhang on 5/13/25.
+//
+
+import SwiftUI
+
+@main
+struct AutoAnkiApp: App {
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+    }
+}
+
+
+# ======================
+# File: AutoAnki/CardGenerationView.swift
+# ======================
+
+//  CardGenerationView.swift
+//  AutoAnki
+
+import SwiftUI
+
+/// View allowing the user to paste raw notes and generate flashcards via GPT.
+struct CardGenerationView: View {
+
+    @EnvironmentObject var deckManager: DeckManager
+    let deck: Deck
+
+    @State private var rawInput: String = ""
+    @State private var isLoading = false
+    @State private var generated: [Card] = []
+    @State private var errorMsg: String? = nil
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Paste text from notes or a PDF. The assistant will generate flashcards you can preview and save.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+
+                TextEditor(text: $rawInput)
+                    .frame(minHeight: 160)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3)))
+                    .padding(.horizontal)
+
+                HStack {
+                    Spacer()
+                    Button(isLoading ? "Generating…" : "Generate Cards") {
+                        Task { await generate() }
+                    }
+                    .disabled(rawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoading)
+                    .buttonStyle(.borderedProminent)
+                    Spacer()
+                }
+
+                if !generated.isEmpty {
+                    Text("Preview (\(generated.count)) cards")
+                        .font(.headline)
+                        .padding(.horizontal)
+
+                    ForEach(generated) { card in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Q: \(card.front)").bold()
+                            Text("A: \(card.back)").foregroundColor(.secondary)
+                        }
+                        .padding(.horizontal)
+                        .padding(.vertical, 6)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.1)))
+                    }
+
+                    HStack {
+                        Spacer()
+                        Button("Add All to Deck") {
+                            deckManager.addCards(to: deck, cards: generated)
+                            generated.removeAll()
+                        }
+                        .buttonStyle(.bordered)
+                        Spacer()
+                    }
+                    .padding(.top)
+                }
+
+                if let errorMsg {
+                    Text(errorMsg).foregroundColor(.red).padding(.horizontal)
+                }
+            }
+            .padding(.vertical)
+        }
+        .navigationTitle("Generate Cards")
+    }
+
+    @MainActor
+    private func generate() async {
+        errorMsg = nil
+        isLoading = true
+        generated = await CardGenerator.shared.generateCards(from: rawInput)
+        isLoading = false
+        if generated.isEmpty { errorMsg = "No cards were generated." }
+    }
+}
+
+// End of file 
+
+# ======================
+# File: AutoAnki/GPTView.swift
+# ======================
+
+import SwiftUI
+import WebKit
+
+/// Multi-turn chat with GPT where the current card's front and back are silently
+/// supplied as context. Each user query automatically includes both sides.
+struct GPTView: View {
+    let card: Card
+
+    @EnvironmentObject var deckManager: DeckManager
+
+    @State private var messages: [Message] = []
+    @State private var userInput: String = ""
+    @State private var isLoading = false
+
+    // Integrate sheet state
+    @State private var selectedAssistantMessage: Message? = nil
+    @State private var integrateInput: String = ""
+    @State private var isIntegrateLoading = false
+    @State private var showSuccessToast = false
+    @State private var errorMessage: String? = nil
+    @State private var showErrorToast = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // ScrollViewReader, chat history, input field, etc.
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(messages.filter { $0.role != "system" }) { msg in
+                            ChatBubble(message: msg, onIntegrate: { tappedMsg in
+                                if tappedMsg.role == "assistant" {
+                                    integrateInput = ""
+                                    selectedAssistantMessage = tappedMsg
+                                }
+                            }).id(msg.id)
+                        }
+                        if isLoading {
+                            ProgressView().progressViewStyle(CircularProgressViewStyle())
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding()
+                        }
+                    }
+                    .padding()
+                }
+                .onChange(of: messages.count) { oldValue, newValue in
+                    if let lastID = messages.last?.id {
+                        // Delay scrolling slightly to allow rendering to complete
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            withAnimation {
+                                proxy.scrollTo(lastID, anchor: .bottom)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            HStack {
+                TextField("Ask about this card…", text: $userInput, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .submitLabel(.send)
+                    .onSubmit(send)
+
+                Button("Send", action: send)
+                    .disabled(userInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoading)
+            }
+            .padding()
+        }
+        .navigationTitle("GPT Help")
+        .sheet(item: $selectedAssistantMessage) { assistantMsg in
+            VStack(spacing: 16) {
+                Text("Integrate into card")
+                    .font(.headline)
+                ScrollView {
+                    MathTextContainer(content: assistantMsg.content)
+                        .frame(maxHeight: 300)
+                }
+                TextEditor(text: $integrateInput)
+                    .frame(height: 120)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3)))
+                    .padding(.horizontal)
+                    .onAppear { integrateInput = "" }
+                    .disabled(isIntegrateLoading)
+
+                if let errorMsg = errorMessage, showErrorToast {
+                    Text(errorMsg)
+                        .foregroundColor(.red)
+                        .font(.callout)
+                        .padding(.horizontal)
+                }
+
+                HStack {
+                    Button("Cancel") { 
+                        selectedAssistantMessage = nil 
+                    }
+                    .disabled(isIntegrateLoading)
+                    
+                    Spacer()
+                    
+                    if isIntegrateLoading {
+                        ProgressView()
+                            .padding(.horizontal)
+                    }
+                    
+                    Button(isIntegrateLoading ? "Processing..." : "Apply") {
+                        applyIntegration(message: assistantMsg)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isIntegrateLoading)
+                }
+                .padding(.horizontal)
+            }
+            .presentationDetents([.medium, .large])
+            .padding()
+        }
+        .overlay(
+            Group {
+                if showSuccessToast {
+                    Label("Saved", systemImage: "checkmark.circle.fill")
+                        .padding(12)
+                        .background(Color.green.opacity(0.9))
+                        .cornerRadius(12)
+                        .foregroundColor(.white)
+                        .transition(.opacity)
+                }
+                else if showErrorToast, let errorMsg = errorMessage {
+                    Label(errorMsg, systemImage: "exclamationmark.triangle.fill")
+                        .padding(12)
+                        .background(Color.red.opacity(0.9))
+                        .cornerRadius(12)
+                        .foregroundColor(.white)
+                        .transition(.opacity)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: UIScreen.main.bounds.width * 0.9)
+                        .multilineTextAlignment(.leading)
+                }
+            }, alignment: .top
+        )
+        .onAppear {
+            // initial system prompt (once)
+            if messages.isEmpty {
+                let system = """
+                You are a helpful study assistant. The flashcard in context is:
+
+                Front: \(card.front)
+                Back: \(card.back)
+
+                Provide clear, concise answers.
+                When explaining mathematical concepts or formulas, use LaTeX notation enclosed in $ symbols for inline math or $$ for block display. 
+                Examples: Use $x^2$ for squared variables or $$\\frac{a}{b}$$ for fractions on their own line.
+                Format mathematical equations using LaTeX syntax and enclose them in $ for inline or $$ for display mode.
+                """
+                messages.append(Message(role: "system", content: system))
+            }
+        }
+    }
+
+    // MARK: - Chat Actions
+
+    /// Every time the user submits, we wrap their text
+    /// with both Front and Back so GPT always sees full context.
+    private func send() {
+        let trimmed = userInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        // We only display the user question in the chat
+        messages.append(Message(role: "user", content: trimmed))
+        
+        // **PREPEND** the full card (front & back) to the API request message:
+        let fullText = """
+        Front: \(card.front)
+        Back: \(card.back)
+
+        Question: \(trimmed)
+
+        Remember to format any mathematical expressions using LaTeX syntax:
+        - Use $...$ for inline math
+        - Use $$...$$ for display math
+        - Escape special characters properly
+        """
+        
+        userInput = ""
+        callGPT(userMessage: fullText)
+    }
+
+    private func callGPT(userMessage: String, retryCount: Int = 0) {
+        isLoading = true
+
+        guard let apiKey = Bundle.main.infoDictionary?["OPENAI_API_KEY"] as? String else {
+            messages.append(Message(role: "assistant", content: "⚠️ Missing API key."))
+            isLoading = false
+            return
+        }
+        
+        // Create API messages - we filter out user display messages
+        var apiMessages = messages.filter { $0.role == "system" }.map { 
+            ["role": $0.role, "content": $0.content] 
+        }
+        
+        // Add the user's message with full context
+        apiMessages.append(["role": "user", "content": userMessage])
+
+        let body: [String: Any] = [
+            "model": "gpt-4o-mini",
+            "messages": apiMessages,
+            "temperature": 0.7
+        ]
+
+        var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        do {
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            DispatchQueue.main.async {
+                messages.append(Message(role: "assistant", content: "⚠️ Error preparing request: \(error.localizedDescription)"))
+            }
+            isLoading = false
+            return
+        }
+
+        URLSession.shared.dataTask(with: req) { data, response, error in
+            defer { isLoading = false }
+
+            if let error = error {
+                if retryCount < 2 {
+                    // Retry after a short delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        callGPT(userMessage: userMessage, retryCount: retryCount + 1)
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        messages.append(Message(role: "assistant", content: "⚠️ Network error: \(error.localizedDescription)"))
+                    }
+                }
+                return
+            }
+
+            guard let data = data else {
+                DispatchQueue.main.async {
+                    messages.append(Message(role: "assistant", content: "⚠️ No data received"))
+                }
+                return
+            }
+
+            do {
+                if let jsonString = String(data: data, encoding: .utf8) {
+                    print("API Response: \(jsonString)") // Debug print
+                }
+                
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                
+                // Check for API error response
+                if let error = json?["error"] as? [String: Any],
+                   let message = error["message"] as? String {
+                    DispatchQueue.main.async {
+                        messages.append(Message(role: "assistant", content: "⚠️ API Error: \(message)"))
+                    }
+                    return
+                }
+                
+                guard let choices = json?["choices"] as? [[String: Any]],
+                      let message = choices.first?["message"] as? [String: Any],
+                      let content = message["content"] as? String else {
+                    throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
+                }
+
+                DispatchQueue.main.async {
+                    messages.append(Message(role: "assistant", content: content.trimmingCharacters(in: .whitespacesAndNewlines)))
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    messages.append(Message(role: "assistant", content: "⚠️ Parsing error: \(error.localizedDescription)"))
+                }
+            }
+        }.resume()
+    }
+
+    /// Apply integration edits to the underlying card via GPT
+    private func applyIntegration(message: Message) {
+        // Find prior user query for context
+        let priorUserQuery = findPriorUserQuery(for: message)
+        
+        isIntegrateLoading = true
+        
+        // Create integration prompt
+        let userInstructions = integrateInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let integrationPrompt = createIntegrationPrompt(
+            front: card.front,
+            back: card.back,
+            userQuery: priorUserQuery,
+            assistantResponse: message.content,
+            userInstructions: userInstructions
+        )
+        
+        // Call GPT to refine the card
+        callGPTForIntegration(prompt: integrationPrompt) { result in
+            self.isIntegrateLoading = false
+            
+            switch result {
+            case .success(let refinedCard):
+                // Update the card with refined content
+                deckManager.updateCard(
+                    in: findDeck(for: card),
+                    cardID: card.id,
+                    newFront: refinedCard.front,
+                    newBack: refinedCard.back
+                )
+                
+                // Close the sheet 
+                self.selectedAssistantMessage = nil
+                
+            case .failure(let error):
+                // Handle error with UI feedback
+                self.errorMessage = "Integration failed: \(error.localizedDescription)"
+                self.showErrorToast = true
+                
+                // Keep sheet open on error
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    self.showErrorToast = false
+                    // Only close sheet after showing the error
+                    self.selectedAssistantMessage = nil
+                }
+            }
+        }
+    }
+    
+    /// Find the user query that preceded the given assistant message
+    private func findPriorUserQuery(for assistantMessage: Message) -> String {
+        guard let assistantIndex = messages.firstIndex(where: { $0.id == assistantMessage.id }) else {
+            return ""
+        }
+        
+        // Look backward for the nearest user message
+        for i in stride(from: assistantIndex - 1, through: 0, by: -1) {
+            if messages[i].role == "user" {
+                return messages[i].content
+            }
+        }
+        
+        return ""
+    }
+    
+    /// Create a prompt to guide GPT in integrating the information
+    private func createIntegrationPrompt(
+        front: String,
+        back: String,
+        userQuery: String,
+        assistantResponse: String,
+        userInstructions: String
+    ) -> String {
+        let basePrompt = """
+        Your task is to refine a flashcard by integrating new information.
+        
+        # ORIGINAL FLASHCARD
+        Front: \(front)
+        Back: \(back)
+        
+        # CONTEXT
+        User question: \(userQuery)
+        Assistant response: \(assistantResponse)
+        
+        # INSTRUCTIONS
+        - By default, only ADD information to the card (do not remove existing information)
+        - Preserve all existing information in both sides of the card
+        - Ensure all mathematical notation is properly formatted with LaTeX ($...$ for inline, $$...$$ for display)
+        - Maintain a clean, organized structure
+        """
+        
+        let customInstructions = userInstructions.isEmpty 
+            ? "- Simply integrate the assistant's response with the existing card content in a natural way"
+            : "- User's specific instructions: \(userInstructions)"
+        
+        let outputFormat = """
+        
+        # OUTPUT FORMAT
+        Return the refined card in this exact format:
+        <CARD>
+        <FRONT>
+        (Front side content)
+        </FRONT>
+        <BACK>
+        (Back side content)
+        </BACK>
+        </CARD>
+        """
+        
+        return basePrompt + "\n" + customInstructions + outputFormat
+    }
+    
+    /// Call GPT API to integrate information
+    private func callGPTForIntegration(
+        prompt: String,
+        retryCount: Int = 0,
+        completion: @escaping (Result<(front: String, back: String), Error>) -> Void
+    ) {
+        guard let apiKey = Bundle.main.infoDictionary?["OPENAI_API_KEY"] as? String else {
+            completion(.failure(NSError(domain: "GPTView", code: 1, userInfo: [NSLocalizedDescriptionKey: "Missing API key"])))
+            return
+        }
+        
+        let messages: [[String: Any]] = [
+            ["role": "system", "content": "You are an expert flashcard creator, specializing in precise, effective learning materials."],
+            ["role": "user", "content": prompt]
+        ]
+        
+        let body: [String: Any] = [
+            "model": "gpt-4o-mini",
+            "messages": messages,
+            "temperature": 0.2  // Lower temperature for more deterministic output
+        ]
+        
+        var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 60 // Longer timeout (60 seconds instead of default 30)
+        
+        do {
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            completion(.failure(error))
+            return
+        }
+        
+        // Configure URLSession with longer timeouts
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 90
+        let session = URLSession(configuration: config)
+        
+        session.dataTask(with: req) { data, response, error in
+            if let error = error {
+                // For network errors, attempt to retry up to 2 times
+                if retryCount < 2 {
+                    // Wait a moment before retrying
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        print("Retrying integration call (attempt \(retryCount + 1))...")
+                        self.callGPTForIntegration(
+                            prompt: prompt,
+                            retryCount: retryCount + 1,
+                            completion: completion
+                        )
+                    }
+                    return
+                }
+                
+                DispatchQueue.main.async {
+                    // Display error to user
+                    self.errorMessage = "Network error: \(error.localizedDescription)"
+                    self.showErrorToast = true
+                    
+                    // Automatically hide after 3 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        self.showErrorToast = false
+                    }
+                    
+                    completion(.failure(error))
+                }
+                return
+            }
+            
+            guard let data = data else {
+                DispatchQueue.main.async {
+                    self.errorMessage = "No data received from server"
+                    self.showErrorToast = true
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        self.showErrorToast = false
+                    }
+                    
+                    completion(.failure(NSError(domain: "GPTView", code: 2, userInfo: [NSLocalizedDescriptionKey: "No data received"])))
+                }
+                return
+            }
+            
+            do {
+                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let choices = json["choices"] as? [[String: Any]],
+                      let message = choices.first?["message"] as? [String: Any],
+                      let content = message["content"] as? String else {
+                    
+                    // Try to get error message from the API response
+                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let error = json["error"] as? [String: Any],
+                       let message = error["message"] as? String {
+                        
+                        DispatchQueue.main.async {
+                            self.errorMessage = "API Error: \(message)"
+                            self.showErrorToast = true
+                            
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                                self.showErrorToast = false
+                            }
+                        }
+                    }
+                    
+                    throw NSError(domain: "GPTView", code: 3, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
+                }
+                
+                // Parse the content for front and back
+                let (front, back) = self.parseCardContent(content)
+                
+                DispatchQueue.main.async {
+                    completion(.success((front: front, back: back)))
+                    self.showSuccessToast = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        self.showSuccessToast = false
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.errorMessage = "Error processing response: \(error.localizedDescription)"
+                    self.showErrorToast = true
+                    
+                    // Automatically hide after 3 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        self.showErrorToast = false
+                    }
+                    
+                    completion(.failure(error))
+                }
+            }
+        }.resume()
+    }
+    
+    /// Parse the card content from GPT response
+    private func parseCardContent(_ content: String) -> (front: String, back: String) {
+        var front = card.front // Default to original card.front
+        var back = card.back   // Default to original card.back
+
+        let nsContent = content as NSString
+
+        func extract(pattern: String) -> String? {
+            do {
+                let regex = try NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators])
+                let range = NSRange(location: 0, length: nsContent.length)
+                if let match = regex.firstMatch(in: content, options: [], range: range) {
+                    if match.numberOfRanges > 1 {
+                        let captureGroupRange = match.range(at: 1)
+                        return nsContent.substring(with: captureGroupRange).trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                }
+            } catch {
+                print("Regex error for pattern \"\(pattern)\": \(error.localizedDescription)")
+            }
+            return nil
+        }
+
+        if let extractedFront = extract(pattern: "<FRONT>(.*?)</FRONT>"), !extractedFront.isEmpty {
+            front = extractedFront
+        }
+
+        if let extractedBack = extract(pattern: "<BACK>(.*?)</BACK>"), !extractedBack.isEmpty {
+            back = extractedBack
+        }
+        
+        return (front, back)
+    }
+
+    /// Find deck containing current card (linear search)
+    private func findDeck(for card: Card) -> Deck {
+        return deckManager.decks.first(where: { deck in
+            deck.cards.contains(where: { $0.id == card.id })
+        }) ?? Deck(name: "")
+    }
+}
+
+/// Chat bubble styling with math rendering support
+private struct ChatBubble: View {
+    let message: Message
+    let onIntegrate: (Message) -> Void
+    
+    @Environment(\.colorScheme) var colorScheme
+    @State private var contentHeight: CGFloat = 0
+    
+    var body: some View {
+        HStack {
+            if message.role == "user" {
+                Spacer()
+                messageContent
+                    .padding(12)
+                    .background(Color.blue.opacity(0.2))
+                    .cornerRadius(16)
+            } else if message.role == "assistant" {
+                ZStack(alignment: .bottomTrailing) {
+                    messageContent
+                        .padding(12)
+                        .background(Color.gray.opacity(0.1))
+                        .cornerRadius(16)
+
+                    Button(action: { onIntegrate(message) }) {
+                        Image(systemName: "square.and.arrow.down")
+                            .font(.system(size: 14, weight: .semibold))
+                            .padding(6)
+                            .background(Color.blue.opacity(0.2))
+                            .clipShape(Circle())
+                    }
+                    .padding(6)
+                }
+                Spacer()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: message.role == "user" ? .trailing : .leading)
+        .padding(.vertical, 8) // Increased vertical padding
+    }
+    
+    @ViewBuilder
+    private var messageContent: some View {
+        if shouldUseMathRendering(message.content) {
+            // Use MathTextContainer for proper dynamic sizing and scrolling
+            MathTextContainer(content: message.content)
+                .frame(maxWidth: UIScreen.main.bounds.width * 0.8) // Increased width
+                .background(GeometryReader { geo in
+                    Color.clear.preference(key: ViewHeightKey.self, value: geo.size.height)
+                })
+                .onPreferenceChange(ViewHeightKey.self) { height in
+                    contentHeight = height
+                }
+        } else {
+            Text(message.content)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: UIScreen.main.bounds.width * 0.8) // Increased width
+        }
+    }
+    
+    /// Determines if we should use math rendering for this content
+    private func shouldUseMathRendering(_ content: String) -> Bool {
+        // Check for $ or $$ delimiters that indicate math content
+        return content.contains("$") || 
+               content.contains("\\[") || 
+               content.contains("\\(") ||
+               content.contains("\\begin{")
+    }
+}
+
+// Height key for preference reading
+private struct ViewHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+
+# ======================
+# File: AutoAnki/ContentView.swift
+# ======================
+
+//
+//  ContentView.swift
+//  AutoAnki
+//
+//  Created by Sean Zhang on 5/13/25.
+//
+
+import SwiftUI
+
+struct ContentView: View {
+    @StateObject var deckManager = DeckManager()
+    @State private var newDeckName = ""
+
+    var body: some View {
+        NavigationStack {
+            VStack {
+                HStack {
+                    TextField("New Deck Name", text: $newDeckName)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                    Button("Add") {
+                        guard !newDeckName.isEmpty else { return }
+                        deckManager.addDeck(name: newDeckName)
+                        newDeckName = ""
+                    }
+                }
+                .padding()
+
+                List {
+                    ForEach(deckManager.decks) { deck in
+                        NavigationLink(destination: DeckDetailView(deck: deck)
+                                        .environmentObject(deckManager)) {
+                            Text(deck.name)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("My Decks")
+        }
+    }
+}
+
+
+# ======================
+# File: AutoAnki/DeckManager.swift
+# ======================
+
+//
+//  DeckManager.swift
+//  AutoAnki
+//
+//  Created by Sean Zhang on 5/13/25.
+//
+
+import Foundation
+
+@MainActor
+class DeckManager: ObservableObject {
+    @Published var decks: [Deck] = []
+
+    private let fileName = "decks.json"
+
+    private var fileURL: URL {
+        let manager = FileManager.default
+        let docs = manager.urls(for: .documentDirectory, in: .userDomainMask).first!
+        return docs.appendingPathComponent(fileName)
+    }
+
+    init() {
+        loadDecks()
+    }
+
+    func addDeck(name: String) {
+        let newDeck = Deck(name: name)
+        decks.append(newDeck)
+        saveDecks()
+    }
+
+    func addCard(to deck: Deck, front: String, back: String) {
+        guard let index = decks.firstIndex(where: { $0.id == deck.id }) else { return }
+        decks[index].cards.append(Card(front: front, back: back))
+        saveDecks()
+    }
+
+    /// Batch-append multiple cards to the specified deck.
+    func addCards(to deck: Deck, cards: [Card]) {
+        guard let index = decks.firstIndex(where: { $0.id == deck.id }) else { return }
+        decks[index].cards.append(contentsOf: cards)
+        saveDecks()
+    }
+
+    func saveDecks() {
+        do {
+            let data = try JSONEncoder().encode(decks)
+            try data.write(to: fileURL)
+        } catch {
+            print("Failed to save decks: \(error)")
+        }
+    }
+
+    func loadDecks() {
+        do {
+            let data = try Data(contentsOf: fileURL)
+            decks = try JSONDecoder().decode([Deck].self, from: data)
+        } catch {
+            print("No saved decks found or failed to load: \(error)")
+        }
+    }
+
+    /// Update the given card's front/back within a deck.
+    func updateCard(in deck: Deck, cardID: UUID, newFront: String, newBack: String) {
+        guard let deckIdx = decks.firstIndex(where: { $0.id == deck.id }) else { return }
+        guard let cardIdx = decks[deckIdx].cards.firstIndex(where: { $0.id == cardID }) else { return }
+        decks[deckIdx].cards[cardIdx].front = newFront
+        decks[deckIdx].cards[cardIdx].back  = newBack
+        saveDecks()
+    }
+}
+
+
+# ======================
+# File: AutoAnki/Assets.xcassets/Contents.json
+# ======================
+
+{
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
+
+
+# ======================
+# File: AutoAnki/Assets.xcassets/AppIcon.appiconset/Contents.json
+# ======================
+
+{
+  "images" : [
+    {
+      "idiom" : "universal",
+      "platform" : "ios",
+      "size" : "1024x1024"
+    },
+    {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ],
+      "idiom" : "universal",
+      "platform" : "ios",
+      "size" : "1024x1024"
+    },
+    {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "tinted"
+        }
+      ],
+      "idiom" : "universal",
+      "platform" : "ios",
+      "size" : "1024x1024"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "1x",
+      "size" : "16x16"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "16x16"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "1x",
+      "size" : "32x32"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "32x32"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "1x",
+      "size" : "128x128"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "128x128"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "1x",
+      "size" : "256x256"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "256x256"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "1x",
+      "size" : "512x512"
+    },
+    {
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "512x512"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
+
+
+# ======================
+# File: AutoAnki/Assets.xcassets/AccentColor.colorset/Contents.json
+# ======================
+
+{
+  "colors" : [
+    {
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
+
+
+# ======================
+# File: AutoAnki/Preview Content/Preview Assets.xcassets/Contents.json
+# ======================
+
+{
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
+
+
+# ======================
+# File: AutoAnkiTests/AutoAnkiTests.swift
+# ======================
+
+//
+//  AutoAnkiTests.swift
+//  AutoAnkiTests
+//
+//  Created by Sean Zhang on 5/13/25.
+//
+
+import Testing
+
+struct AutoAnkiTests {
+
+    @Test func example() async throws {
+        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
+    }
+
+}
+
+
+# ======================
+# File: AutoAnkiUITests/AutoAnkiUITests.swift
+# ======================
+
+//
+//  AutoAnkiUITests.swift
+//  AutoAnkiUITests
+//
+//  Created by Sean Zhang on 5/13/25.
+//
+
+import XCTest
+
+final class AutoAnkiUITests: XCTestCase {
+
+    override func setUpWithError() throws {
+        // Put setup code here. This method is called before the invocation of each test method in the class.
+
+        // In UI tests it is usually best to stop immediately when a failure occurs.
+        continueAfterFailure = false
+
+        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
+    }
+
+    override func tearDownWithError() throws {
+        // Put teardown code here. This method is called after the invocation of each test method in the class.
+    }
+
+    @MainActor
+    func testExample() throws {
+        // UI tests must launch the application that they test.
+        let app = XCUIApplication()
+        app.launch()
+
+        // Use XCTAssert and related functions to verify your tests produce the correct results.
+    }
+
+    @MainActor
+    func testLaunchPerformance() throws {
+        if #available(macOS 10.15, iOS 13.0, tvOS 13.0, watchOS 7.0, *) {
+            // This measures how long it takes to launch your application.
+            measure(metrics: [XCTApplicationLaunchMetric()]) {
+                XCUIApplication().launch()
+            }
+        }
+    }
+}
+
+
+# ======================
+# File: AutoAnkiUITests/AutoAnkiUITestsLaunchTests.swift
+# ======================
+
+//
+//  AutoAnkiUITestsLaunchTests.swift
+//  AutoAnkiUITests
+//
+//  Created by Sean Zhang on 5/13/25.
+//
+
+import XCTest
+
+final class AutoAnkiUITestsLaunchTests: XCTestCase {
+
+    override class var runsForEachTargetApplicationUIConfiguration: Bool {
+        true
+    }
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+    }
+
+    @MainActor
+    func testLaunch() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        // Insert steps here to perform after app launch but before taking a screenshot,
+        // such as logging into a test account or navigating somewhere in the app
+
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Launch Screen"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+}

@@ -1,0 +1,246 @@
+diff --git a/AutoAnki/DeckManager.swift b/AutoAnki/DeckManager.swift
+@@
+     func addCard(to deck: Deck, front: String, back: String) {
+         guard let index = decks.firstIndex(where: { $0.id == deck.id }) else { return }
+         decks[index].cards.append(Card(front: front, back: back))
+         saveDecks()
+     }
++
++    /// Batch‑append multiple cards to the specified deck.
++    func addCards(to deck: Deck, cards: [Card]) {
++        guard let index = decks.firstIndex(where: { $0.id == deck.id }) else { return }
++        decks[index].cards.append(contentsOf: cards)
++        saveDecks()
++    }
+@@
+ }
+
+diff --git a/AutoAnki/CardGenerator.swift b/AutoAnki/CardGenerator.swift
+new file mode 100644
+--- /dev/null
++++ b/AutoAnki/CardGenerator.swift
+@@
++//  CardGenerator.swift
++//  AutoAnki
++//  Generates flashcards from raw text using GPT function‑calling.
++
++import Foundation
++
++@MainActor
++final class CardGenerator {
++
++    static let shared = CardGenerator()
++    private init() {}
++
++    /// Generates cards from raw text using the \`extract_cards_from_text\` function schema.
++    /// - Parameter text: Raw study notes or extracted PDF text.
++    /// - Returns: Array of freshly generated `Card`s (may be empty on failure).
++    func generateCards(from text: String) async -> [Card] {
++        guard let apiKey = Bundle.main.infoDictionary?["OPENAI_API_KEY"] as? String else {
++            print("⚠️ Missing API key in Info.plist")
++            return []
++        }
++
++        // --- 1. Build the function schema ----------------------------------
++        let functionSchema: [String: Any] = [
++            "name": "extract_cards_from_text",
++            "description": "Generate Anki flashcards from raw input text.",
++            "parameters": [
++                "type": "object",
++                "properties": [
++                    "cards": [
++                        "type": "array",
++                        "items": [
++                            "type": "object",
++                            "properties": [
++                                "front": ["type": "string"],
++                                "back":  ["type": "string"]
++                            ],
++                            "required": ["front", "back"]
++                        ]
++                    ]
++                ],
++                "required": ["cards"]
++            ]
++        ]
++
++        // --- 2. Compose chat messages ---------------------------------------
++        let systemPrompt = "You are an expert flashcard generator. Follow Anki best‑practices. Return JSON matching the function schema when invoked."
++        let userPrompt   = "Generate high‑quality flashcards from the following text:\n\n" + text
++
++        let messages: [[String: Any]] = [
++            ["role": "system", "content": systemPrompt],
++            ["role": "user",   "content": userPrompt]
++        ]
++
++        let body: [String: Any] = [
++            "model": "gpt-4o-mini",
++            "messages": messages,
++            "functions": [functionSchema],
++            "function_call": ["name": "extract_cards_from_text"]
++        ]
++
++        // --- 3. Perform request ---------------------------------------------
++        var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
++        req.httpMethod = "POST"
++        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
++        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
++
++        do { req.httpBody = try JSONSerialization.data(withJSONObject: body) } catch {
++            print("⚠️ Failed to encode request body: \(error)"); return [] }
++
++        do {
++            let (data, _) = try await URLSession.shared.data(for: req)
++            guard
++                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
++                let choices = json["choices"] as? [[String: Any]],
++                let message = choices.first?["message"] as? [String: Any]
++            else { return [] }
++
++            // Prefer structured tool call result
++            if let functionCall = message["function_call"] as? [String: Any],
++               let argumentsRaw = functionCall["arguments"] as? String,
++               let argumentsData = argumentsRaw.data(using: .utf8),
++               let argsJSON  = try? JSONSerialization.jsonObject(with: argumentsData) as? [String: Any],
++               let cardDicts = argsJSON["cards"] as? [[String: String]] {
++                return cardDicts.compactMap { dict in
++                    guard let f = dict["front"], let b = dict["back"] else { return nil }
++                    return Card(front: f, back: b)
++                }
++            }
++
++            // Fallback: try plain‑text JSON in content
++            if let content = message["content"] as? String,
++               let data = content.data(using: .utf8),
++               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] {
++                return array.compactMap { dict in
++                    guard let f = dict["front"], let b = dict["back"] else { return nil }
++                    return Card(front: f, back: b)
++                }
++            }
++        } catch {
++            print("⚠️ Card generation network/parsing error: \(error)")
++        }
++
++        return []
++    }
++}
++
+
++extension Card: Hashable {
++    func hash(into hasher: inout Hasher) { hasher.combine(id) }
++    static func == (lhs: Card, rhs: Card) -> Bool { lhs.id == rhs.id }
++}
++
++// End of file
+
+diff --git a/AutoAnki/CardGenerationView.swift b/AutoAnki/CardGenerationView.swift
+new file mode 100644
+--- /dev/null
++++ b/AutoAnki/CardGenerationView.swift
+@@
++//  CardGenerationView.swift
++//  AutoAnki
++
++import SwiftUI
++
++/// View allowing the user to paste raw notes and generate flashcards via GPT.
++struct CardGenerationView: View {
++
++    @EnvironmentObject var deckManager: DeckManager
++    let deck: Deck
++
++    @State private var rawInput: String = ""
++    @State private var isLoading = false
++    @State private var generated: [Card] = []
++    @State private var errorMsg: String? = nil
++
++    var body: some View {
++        ScrollView {
++            VStack(alignment: .leading, spacing: 16) {
++                TextEditor(text: $rawInput)
++                    .frame(minHeight: 160)
++                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3)))
++                    .padding(.horizontal)
++
++                HStack {
++                    Spacer()
++                    Button(isLoading ? "Generating…" : "Generate Cards") { Task { await generate() } }
++                        .disabled(rawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoading)
++                        .buttonStyle(.borderedProminent)
++                    Spacer()
++                }
++
++                if !generated.isEmpty {
++                    Text("Preview (\(generated.count)) cards")
++                        .font(.headline)
++                        .padding(.horizontal)
++
++                    ForEach(generated) { card in
++                        VStack(alignment: .leading, spacing: 4) {
++                            Text("Q: \(card.front)").bold()
++                            Text("A: \(card.back)").foregroundColor(.secondary)
++                        }
++                        .padding(.horizontal)
++                        .padding(.vertical, 6)
++                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.1)))
++                    }
++
++                    HStack {
++                        Spacer()
++                        Button("Add All to Deck") {
++                            deckManager.addCards(to: deck, cards: generated)
++                            generated.removeAll()
++                        }
++                        .buttonStyle(.bordered)
++                        Spacer()
++                    }
++                    .padding(.top)
++                }
++
++                if let errorMsg { Text(errorMsg).foregroundColor(.red).padding(.horizontal) }
++            }
++            .padding(.vertical)
++        }
++        .navigationTitle("Generate Cards")
++    }
++
++    @MainActor
++    private func generate() async {
++        errorMsg = nil
++        isLoading = true
++        generated = await CardGenerator.shared.generateCards(from: rawInput)
++        isLoading = false
++        if generated.isEmpty { errorMsg = "No cards were generated." }
++    }
++}
++
++// End of file
+
+diff --git a/AutoAnki/DeckDetailView.swift b/AutoAnki/DeckDetailView.swift
+@@
+             NavigationLink(destination: StudySessionView(deck: deck)) {
+                 Text("▶️ Study with GPT")
+                     .font(.headline)
+                     .padding()
+                     .frame(maxWidth: .infinity)
+                     .background(Color.blue)
+                     .foregroundColor(.white)
+                     .cornerRadius(10)
+                     .padding(.horizontal)
+             }
++
++            // New card‑generation entry point
++            NavigationLink(destination: CardGenerationView(deck: deck).environmentObject(deckManager)) {
++                Text("✨ Generate Cards from Text/PDF")
++                    .font(.subheadline)
++                    .padding(8)
++                    .frame(maxWidth: .infinity)
++                    .background(Color.green.opacity(0.2))
++                    .cornerRadius(8)
++                    .padding(.horizontal)
++            }
+@@
+         .navigationTitle(deck.name)
+     }
+ }

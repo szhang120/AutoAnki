@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		E50780BE2DD422E600EE0B74 /* .entitlements in Resources */ = {isa = PBXBuildFile; fileRef = E50780BD2DD422D600EE0B74 /* .entitlements */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		E50780862DD4109300EE0B74 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,11 +31,37 @@
 		E50780742DD4109000EE0B74 /* AutoAnki.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AutoAnki.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E50780852DD4109300EE0B74 /* AutoAnkiTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AutoAnkiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E507808F2DD4109300EE0B74 /* AutoAnkiUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AutoAnkiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E50780BD2DD422D600EE0B74 /* .entitlements */ = {isa = PBXFileReference; lastKnownFileType = text; path = .entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		E50780B72DD4174400EE0B74 /* Exceptions for "AutoAnki" folder in "AutoAnki" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+				Secrets.xcconfig,
+			);
+			target = E50780732DD4109000EE0B74 /* AutoAnki */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+		E50780B82DD4174400EE0B74 /* Exceptions for "AutoAnki" folder in "Compile Sources" phase from "AutoAnki" target */ = {
+			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
+			buildPhase = E50780702DD4109000EE0B74 /* Sources */;
+			membershipExceptions = (
+				Secrets.xcconfig,
+			);
+		};
+/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E50780762DD4109000EE0B74 /* AutoAnki */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				E50780B72DD4174400EE0B74 /* Exceptions for "AutoAnki" folder in "AutoAnki" target */,
+				E50780B82DD4174400EE0B74 /* Exceptions for "AutoAnki" folder in "Compile Sources" phase from "AutoAnki" target */,
+			);
 			path = AutoAnki;
 			sourceTree = "<group>";
 		};
@@ -75,6 +105,7 @@
 		E507806B2DD4109000EE0B74 = {
 			isa = PBXGroup;
 			children = (
+				E50780BD2DD422D600EE0B74 /* .entitlements */,
 				E50780762DD4109000EE0B74 /* AutoAnki */,
 				E50780882DD4109300EE0B74 /* AutoAnkiTests */,
 				E50780922DD4109300EE0B74 /* AutoAnkiUITests */,
@@ -212,6 +243,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E50780BE2DD422E600EE0B74 /* .entitlements in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -385,6 +417,8 @@
 		};
 		E507809A2DD4109300EE0B74 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = E50780762DD4109000EE0B74 /* AutoAnki */;
+			baseConfigurationReferenceRelativePath = Secrets.xcconfig;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -393,7 +427,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"AutoAnki/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AutoAnki/Info.plist;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -430,7 +465,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"AutoAnki/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AutoAnki/Info.plist;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;

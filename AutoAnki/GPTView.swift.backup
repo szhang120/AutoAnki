@@ -1,0 +1,244 @@
+import SwiftUI
+import WebKit
+
+/// Multi-turn chat with GPT where the current card's front and back are silently
+/// supplied as context. Each user query automatically includes both sides.
+struct GPTView: View {
+    let card: Card
+
+    @State private var messages: [Message] = []
+    @State private var userInput: String = ""
+    @State private var isLoading = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // ScrollViewReader, chat history, input field, etc.
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(messages.filter { $0.role != "system" }) { msg in
+                            ChatBubble(message: msg).id(msg.id)
+                        }
+                        if isLoading {
+                            ProgressView().progressViewStyle(CircularProgressViewStyle())
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding()
+                        }
+                    }
+                    .padding()
+                }
+                .onChange(of: messages.count) { _ in
+                    if let lastID = messages.last?.id {
+                        proxy.scrollTo(lastID, anchor: .bottom)
+                    }
+                }
+            }
+
+            Divider()
+
+            HStack {
+                TextField("Ask about this card…", text: $userInput, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .submitLabel(.send)
+                    .onSubmit(send)
+
+                Button("Send", action: send)
+                    .disabled(userInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoading)
+            }
+            .padding()
+        }
+        .navigationTitle("GPT Help")
+        .onAppear {
+            // initial system prompt (once)
+            if messages.isEmpty {
+                let system = """
+                You are a helpful study assistant. The flashcard in context is:
+
+                Front: \(card.front)
+                Back: \(card.back)
+
+                Provide clear, concise answers.
+                When explaining mathematical concepts or formulas, use LaTeX notation enclosed in $ symbols for inline math or $$ for block display. 
+                Examples: Use $x^2$ for squared variables or $$\\frac{a}{b}$$ for fractions on their own line.
+                Format mathematical equations using LaTeX syntax and enclose them in $ for inline or $$ for display mode.
+                """
+                messages.append(Message(role: "system", content: system))
+            }
+        }
+    }
+
+    // MARK: - Chat Actions
+
+    /// Every time the user submits, we wrap their text
+    /// with both Front and Back so GPT always sees full context.
+    private func send() {
+        let trimmed = userInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        // We only display the user question in the chat
+        messages.append(Message(role: "user", content: trimmed))
+        
+        // **PREPEND** the full card (front & back) to the API request message:
+        let fullText = """
+        Front: \(card.front)
+        Back: \(card.back)
+
+        Question: \(trimmed)
+
+        Remember to format any mathematical expressions using LaTeX syntax:
+        - Use $...$ for inline math
+        - Use $$...$$ for display math
+        - Escape special characters properly
+        """
+        
+        userInput = ""
+        callGPT(userMessage: fullText)
+    }
+
+    private func callGPT(userMessage: String, retryCount: Int = 0) {
+        isLoading = true
+
+        guard let apiKey = Bundle.main.infoDictionary?["OPENAI_API_KEY"] as? String else {
+            messages.append(Message(role: "assistant", content: "⚠️ Missing API key."))
+            isLoading = false
+            return
+        }
+        
+        // Create API messages - we filter out user display messages
+        var apiMessages = messages.filter { $0.role == "system" }.map { 
+            ["role": $0.role, "content": $0.content] 
+        }
+        
+        // Add the user's message with full context
+        apiMessages.append(["role": "user", "content": userMessage])
+
+        let body: [String: Any] = [
+            "model": "gpt-4o-mini",
+            "messages": apiMessages,
+            "temperature": 0.7
+        ]
+
+        var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        do {
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            DispatchQueue.main.async {
+                messages.append(Message(role: "assistant", content: "⚠️ Error preparing request: \(error.localizedDescription)"))
+            }
+            isLoading = false
+            return
+        }
+
+        URLSession.shared.dataTask(with: req) { data, response, error in
+            defer { isLoading = false }
+
+            if let error = error {
+                if retryCount < 2 {
+                    // Retry after a short delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        callGPT(userMessage: userMessage, retryCount: retryCount + 1)
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        messages.append(Message(role: "assistant", content: "⚠️ Network error: \(error.localizedDescription)"))
+                    }
+                }
+                return
+            }
+
+            guard let data = data else {
+                DispatchQueue.main.async {
+                    messages.append(Message(role: "assistant", content: "⚠️ No data received"))
+                }
+                return
+            }
+
+            do {
+                if let jsonString = String(data: data, encoding: .utf8) {
+                    print("API Response: \(jsonString)") // Debug print
+                }
+                
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                
+                // Check for API error response
+                if let error = json?["error"] as? [String: Any],
+                   let message = error["message"] as? String {
+                    DispatchQueue.main.async {
+                        messages.append(Message(role: "assistant", content: "⚠️ API Error: \(message)"))
+                    }
+                    return
+                }
+                
+                guard let choices = json?["choices"] as? [[String: Any]],
+                      let message = choices.first?["message"] as? [String: Any],
+                      let content = message["content"] as? String else {
+                    throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
+                }
+
+                DispatchQueue.main.async {
+                    messages.append(Message(role: "assistant", content: content.trimmingCharacters(in: .whitespacesAndNewlines)))
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    messages.append(Message(role: "assistant", content: "⚠️ Parsing error: \(error.localizedDescription)"))
+                }
+            }
+        }.resume()
+    }
+}
+
+/// Chat bubble styling with math rendering support
+private struct ChatBubble: View {
+    let message: Message
+    
+    @Environment(\.colorScheme) var colorScheme
+    
+    var body: some View {
+        HStack {
+            if message.role == "user" {
+                Spacer()
+                messageContent
+                    .padding(12)
+                    .background(Color.blue.opacity(0.2))
+                    .cornerRadius(16)
+            } else if message.role == "assistant" {
+                messageContent
+                    .padding(12)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(16)
+                Spacer()
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 4)
+    }
+    
+    @ViewBuilder
+    private var messageContent: some View {
+        if shouldUseMathRendering(message.content) {
+            // Use MathTextView directly with scroll capability
+            ScrollView(.vertical, showsIndicators: true) {
+                MathTextView(content: message.content, onHeightChange: { _ in })
+                    .frame(minHeight: 44)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxHeight: 600)
+        } else {
+            Text(message.content)
+                .textSelection(.enabled)
+        }
+    }
+    
+    /// Determines if we should use math rendering for this content
+    private func shouldUseMathRendering(_ content: String) -> Bool {
+        // Check for $ or $$ delimiters that indicate math content
+        return content.contains("$") || 
+               content.contains("\\[") || 
+               content.contains("\\(") ||
+               content.contains("\\begin{")
+    }
+}
